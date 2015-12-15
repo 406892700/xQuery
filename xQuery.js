@@ -5,17 +5,17 @@
  *   date 2015-12
  *   version 0.1
  *
- *   |一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一|
+ *   ________________________________________________________________________
  *   | //                                                                   |
- *   |   @1:事件系统未完成                                                    |
- *   |   @2:缓存系统未完成                                                    |
+ *   |   @1:事件系统未完成   (初步完成，虽然还有很大的缺陷，聊胜于无)              |
+ *   |   @2:缓存系统未完成   (事件绑定用到了，但是未成系统~)                     |
  *   |                                                                      |
  *   |  @tips 因为主要是面向移动端的，所以基本没有做ie的兼容，只封装了             |
  *   |  一部分常会用到的方法，目前事件代理，动画效果都需要自己去做                 |
- *   |  考虑到文件的大小，以后最多就实现todo中的两个，动画就不做了，               |
+ *   |  考虑到文件的大小，动画就不做了，                                        |
  *   |  交给css3了                                                           |
  *   |                                                                      |
- *   |一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一一|
+ *   ________________________________________________________________________
  */
 ;(function(window,undefined){
     /*ajax对象构造函数*/
@@ -90,6 +90,15 @@
 
         }
     };
+
+    /*
+    *   缓存对象
+    * */
+    var cache = {},
+        unique = '__xQuery__',
+        getUnique = function(){
+            return unique+(new Date().getTime());
+        };
 
     /*
     * 核心构造函数
@@ -351,11 +360,6 @@
             // Return the modified object
             return target;//返回被更改后的对象
         },
-        camelCase : function (str) {//驼峰式
-            return str.replace(/(-[\da-z])/gi,function(word,letter){
-                return RegExp.$1.substr(1,1).toUpperCase();
-            });
-        },
         //文档加载完成函数
         domReady : function (callback){
             document.addEventListener('DOMContentLoaded',callback);
@@ -365,6 +369,20 @@
             return new ajax(opts).initAjax();
         }
     };
+
+
+    //获取所有的事件类型
+    var allEvents = (function(){
+        var x = document.createElement('div'),
+            fEvent = /^on\w+$/i,
+            tmp = [];
+        for(var i in x){
+            fEvent.test(i) && tmp.push(i.replace(/^on/i,''));
+        }
+
+        return tmp.join(' ');
+
+    })();
 
     /*
     * 核心对象的原型方法
@@ -527,15 +545,107 @@
         },
         //事件绑定
         /*
-        *  param proxyObj 事件代理对象
+        *  param [proxyObj] 事件代理对象(这里被希望传入的是一个选择器字符串)
         *  param eventType 事件类型
         *  param callback 事件回调函数
-        *  param data 事件所需的数据，可以不传
+        *  param [data] 事件所需的数据，可以不传
+        *  tips
+        *  有些事件无法冒泡,暂时不处理了,不用代理的方式来绑定
+        *  事件即可
+        *
+        *  、、、、、、、、、、、、、、、、、、、、、
+        *    在这里使用的一个缓存独享cache，用于自主
+        *    控制事件处理函数的管理，在一定程度上可以
+        *    避免可能的内存泄露所带来的性能浪费
+        *  、、、、、、、、、、、、、、、、、、、、、
         * */
-        bind:function(proxyObj,eventType,callback,data){
+        bind:function(/*proxyObj,eventType,callback,data*/){
+            var opElem  = this.getOpElem(),
+                self = this,
+            //进行一些参数修正
+                funcIndex = (function(args){
+                    var index = -1;
+                    [].map.call(args,function(v,i){
+                        if(_util.isFunction(v)){
+                            index = i+1;
+                        }
+                    });
+
+                    return index;
+                })(arguments),
+                obj = {},
+                /*(这个就不循环绑定了，只绑定选择集中的操作元素)
+                 *考虑实际情况下，代理元素一般都是一个特定的对象，故在此放弃了循环
+                 * 如有需要，在外部使用时候进行循环绑定
+                 * 当需要批量绑定时，推荐使用代理绑定方式
+                 * todo:
+                 * 这里还有一些情况没有进行处理
+                 * 1、当一个对象被两次或两次以上代理时，后面的代理会覆盖前面的代理
+                 * 2、批量绑定多个事件的情况没有予以处理
+                 * 3、这种处理方式确实很不优雅，会元素上生成一堆无用的data-uuid属性，
+                 *    这样的实现方式还需要斟酌，这里就留待以后处理了
+                 * 4、同一个元素绑定两次相同事件会造成后面的绑定覆盖前面的绑定，这个是个巨大的！！硬伤！！，
+                 *    暂时还没有完美的解决方案，先研究一些jQuery的事件系统，再回来改这里的实现
+                 * */
+                bindEvent = function (opElem,ob) {
+                    var uniqueId = getUnique();
+                    //设置uuid
+                    self.eq(0).data('uuid',uniqueId);
+                    cache[uniqueId] = cache[uniqueId] || {};
+                    if(typeof ob.proxyObj === 'undefined'){//无代理
+                        cache[uniqueId][ob.type] = function(event){
+                            event.data = ob.data;
+                            ob.callback(event);
+                        };
+
+                    }else if(typeof ob.proxyObj === 'string'){
+                        cache[uniqueId][ob.type] = function(event){
+                            event.data = ob.data;
+                            var targetArr = _util.findElement(opElem,ob.proxyObj);
+                            if(_util.ifArrayIn(event.target,targetArr)){
+                                ob.callback(event);
+                            }
+
+                        };
+
+                    }
+                    opElem.addEventListener(ob.type,cache[uniqueId][ob.type],false);
+                };
+
+            //根据funcIndex判断是否有代理
+            if(funcIndex === 2){//在2位置上,说明没有proxy
+                obj = {
+                    type : arguments[0],
+                    callback : arguments[1],
+                    data : arguments[2]
+                }
+
+            }else if(funcIndex === 3){//在3位置上,说明有proxy
+                obj = {
+                    proxyObj : arguments[0],
+                    type : arguments[1],
+                    callback : arguments[2],
+                    data : arguments[3]
+                }
+            }
+
+            bindEvent(opElem,obj);
+
+            return this;
 
         },
-        //执行一些dom操作，这个会破坏链式操作，无法用end返回
+        //事件绑定解除
+        unbind:function(eventType/**/){
+            var self = this,
+                opElem = this.getOpElem(),
+                uuid = self.eq(0).data('uuid');
+
+            opElem.removeEventListener(eventType,$.cache[uuid][eventType]);
+            delete $.cache[uuid][eventType];//移除缓存的事件处理函数
+
+            return this;
+        },
+        //执行一些dom操作，这个会破坏链式操作(这里指操作对象会被替换)
         _stateChange: function (domElem) {
             domElem = _util.isArraylike(domElem) ? domElem : [domElem];
             //domElem = _util.getType(domElem).toLowerCase() !== 'array' ? [domElem]:domElem;
@@ -674,7 +784,7 @@
                     return opElem.getAttribute(attr);
                 }else{
                     for(var i in attr){
-                        [],map.call(attr[i],function(v,i){
+                        [].map.call(attr[i],function(v,i){
                             v.setAttribute(attr,value);
                         });
                     }
@@ -843,7 +953,8 @@
         return _$;
     };
 
-    _$.noConflit = noConflit;
+    _$.cache = cache;//缓存对象
+    _$.noConflit = noConflit;//放弃$的控制权
     _$.version = 'xQuery_0.1';//版本号
     _$.getTime = function(){//获取当前时间
       return +new Date();
